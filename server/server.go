@@ -1,12 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net"
-	"strconv"
+	"sync"
 	"time"
 
 	// this has to be the same as the go.mod module,
@@ -18,11 +18,13 @@ import (
 )
 
 type Server struct {
-	gRPC.UnimplementedChittyChatServer        // You need this line if you have a server
-	name                               string // Not required but useful if you want to name your server
-	port                               string // Not required but useful if your server needs to know what port it's listening to
-	channel                            map[string]chan *proto.Message
-	lamportClock                       int32
+	gRPC.UnimplementedAuctionServer        // You need this line if you have a server
+	name                            string // Not required but useful if you want to name your server
+	port                            string // Not required but useful if your server needs to know what port it's listening to
+	channel                         map[string]chan *proto.Message
+	lamportClock                    int32
+	highestBid                      int32
+	mutex                           sync.Mutex
 }
 
 // flags are used to get arguments from the terminal. Flags take a value, a default value and a description of the flag.
@@ -68,7 +70,7 @@ func launchServer() {
 		channel:      make(map[string]chan *proto.Message),
 	}
 
-	gRPC.RegisterChittyChatServer(grpcServer, server) //Registers the server to the gRPC server
+	gRPC.RegisterAuctionServer(grpcServer, server) //Registers the server to the gRPC server
 
 	log.Printf("Server %s: Listening on port %s\n", *serverName, *port)
 
@@ -77,7 +79,7 @@ func launchServer() {
 	}
 }
 
-func (s *Server) JoinChat(msg *proto.Message, msgStream proto.ChittyChat_JoinChatServer) error {
+func (s *Server) JoinAuction(msg *proto.Message, msgStream proto.Auction_JoinAuctionServer) error {
 
 	msgChannel := make(chan *proto.Message)
 	s.channel[msg.Sender] = msgChannel
@@ -93,41 +95,26 @@ func (s *Server) JoinChat(msg *proto.Message, msgStream proto.ChittyChat_JoinCha
 	}
 }
 
-func (s *Server) SendMessage(msgStream proto.ChittyChat_SendMessageServer) error {
-	msg, err := msgStream.Recv()
+func (s *Server) Bid(ctx context.Context, amount *gRPC.Amount) (*gRPC.Acknowledgement, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 
-	if err == io.EOF {
-		return nil
+	if amount.Lamport > s.lamportClock {
+		s.lamportClock = amount.Lamport
 	}
-
-	if err != nil {
-		return err
-	}
-	if msg.Lamport > s.lamportClock {
-		s.lamportClock = msg.Lamport
-	}
-	log.Printf("Received message: %v \n", msg)
+	log.Printf("Received bid amount: %v \n", amount.Amount)
 	s.lamportClock++
-	if msg.Message == "close" {
-		delete(s.channel, msg.Sender)
-		log.Printf("Closing connection to client %v", msg.Sender)
-		ack := proto.MessageAck{Status: "DISCONNECTED"}
-		msgStream.SendAndClose(&ack)
-		msg.Message = "Participant " + msg.Sender + " has left ChittyChat at Lamport time " + strconv.Itoa(int(s.lamportClock))
-	} else if msg.Message == "join" {
-		log.Printf("Participant %v has joined ChittyChat at Lamport time "+strconv.Itoa(int(s.lamportClock)), msg.Sender)
-		msg.Message = "Participant " + msg.Sender + " has joined ChittyChat at Lamport time " + strconv.Itoa(int(s.lamportClock))
-		ack := proto.MessageAck{Status: "CONNECTED"}
-		msgStream.SendAndClose(&ack)
-	} else {
-		ack := proto.MessageAck{Status: "SENT"}
-		msgStream.SendAndClose(&ack)
+	if amount.Amount > s.highestBid {
+		s.highestBid = amount.Amount
+		return &proto.Acknowledgement{Status: "ACCEPTED", Lamport: s.lamportClock}, nil
 	}
-	go func() {
-		for _, msgChan := range s.channel {
-			msgChan <- msg
-		}
-	}()
+	return &proto.Acknowledgement{Status: "ERROR", Lamport: s.lamportClock}, nil
+}
 
-	return nil
+func (s *Server) Result(ctx context.Context, request *gRPC.Request) (*gRPC.Amount, error) {
+	if request.Lamport > s.lamportClock {
+		s.lamportClock = request.Lamport
+	}
+	s.lamportClock++
+	return &gRPC.Amount{Amount: s.highestBid, Lamport: s.lamportClock}, nil
 }

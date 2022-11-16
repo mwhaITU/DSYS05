@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DarkLordOfDeadstiny/DSYS-gRPC-template/proto"
@@ -18,12 +19,26 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+type node struct {
+	listenPort string
+	nodeID     int32
+	//channels        map[string]chan gRPC.Reply
+	lamport         int32
+	nodeSlice       []nodeConnection
+	mutex           sync.Mutex
+	state           string
+	requests        []string
+	lamportRequest  int32
+	repliesReceived chan int
+}
+type nodeConnection struct {
+	node     gRPC.AuctionClient
+	nodeConn *grpc.ClientConn
+}
+
 // Same principle as in client. Flags allows for user specific arguments/values
-var clientsName = flag.String("name", "default", "Senders name")
-var serverPort = flag.String("server", "5400", "Tcp server")
-var server gRPC.ChittyChatClient //the server
-var ServerConn *grpc.ClientConn  //the server connection
-var LamportClock int32
+var nodeName = flag.Int("name", 0, "Senders name")
+var port = flag.String("port", "5400", "Listen port")
 
 func main() {
 	//parse flag/arguments
@@ -36,28 +51,21 @@ func main() {
 
 	//connect to server and close the connection when program closes
 	fmt.Println("--- join Server ---")
-	ConnectToServer()
-	defer ServerConn.Close()
 
-	ctx := context.Background()
-	client := proto.NewChittyChatClient(ServerConn)
-
-	go joinChat(ctx, client)
-
-	parseInput(ctx, server)
+	node := node{
+		listenPort:      *port,
+		nodeID:          int32(*nodeName),
+		nodeSlice:       make([]nodeConnection, 0),
+		lamport:         1,
+		repliesReceived: make(chan int),
+	}
+	go node.parseInput()
+	for {
+		time.Sleep(5 * time.Second)
+	}
 }
 
-func DisconnectFromServer() {
-	ctx := context.Background()
-	server := proto.NewChittyChatClient(ServerConn)
-	sendMessage(ctx, server, "close")
-	log.Printf("Closing connection to server from %v", *clientsName)
-	LamportClock = 0
-}
-
-// connect to server
-func ConnectToServer() {
-
+func (n *node) ConnectToNode(port string) {
 	//dial options
 	//the server is not using TLS, so we use insecure credentials
 	//(should be fine for local testing but not in the real world)
@@ -69,9 +77,9 @@ func ConnectToServer() {
 	defer cancel() //cancel the connection when we are done
 
 	//dial the server to get a connection to it
-	log.Printf("client %s: Attempts to dial on port %s\n", *clientsName, *serverPort)
+	log.Printf("client %v: Attempts to dial on port %v\n", n.nodeID, port)
 	// Insert your device's IP before the colon in the print statement
-	conn, err := grpc.DialContext(timeContext, fmt.Sprintf("localhost:%s", *serverPort), opts...)
+	conn, err := grpc.DialContext(timeContext, fmt.Sprintf(":%s", port), opts...)
 	if err != nil {
 		log.Printf("Fail to Dial : %v", err)
 		return
@@ -79,51 +87,52 @@ func ConnectToServer() {
 
 	// makes a client from the server connection and saves the connection
 	// and prints rather or not the connection was is READY
-	server = gRPC.NewChittyChatClient(conn)
-	ServerConn = conn
+	nodeConnection := nodeConnection{
+		node:     gRPC.NewAuctionClient(conn),
+		nodeConn: conn,
+	}
+	n.nodeSlice = append(n.nodeSlice, nodeConnection)
 	log.Println("the connection is: ", conn.GetState().String())
 }
 
-func parseInput(ctx context.Context, server gRPC.ChittyChatClient) {
-
-	reader := bufio.NewReaderSize(os.Stdin, 128)
+func (n *node) parseInput() {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("--------------------")
 
 	//Infinite loop to listen for clients input.
 	for {
+		fmt.Print("-> ")
+
 		//Read input into var input and any errors into err
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			log.Fatal(err)
 		}
 		input = strings.TrimSpace(input) //Trim input
-		if len(input) > 128 {
-			fmt.Println("Message must be shorter than 128 characters. Please try again...")
-			continue
-		}
-		if input == "close" {
-			DisconnectFromServer()
-			break
-		}
-		if !conReady(server) {
-			log.Printf("Client %s: something was wrong with the connection to the server :(", *clientsName)
-			continue
-		}
-		sendMessage(ctx, server, input)
+		if strings.Contains(input, "connect") {
+			portString := input[8:12]
+			if err != nil {
+				// ... handle error
+				panic(err)
+			}
+			n.ConnectToNode(portString)
+		} else if strings.Contains(input, "bid") {
 
+		} else if strings.Contains(input, "result") {
+
+		}
 		continue
 	}
 }
 
-func joinChat(ctx context.Context, server proto.ChittyChatClient) {
-	ack := proto.Message{Sender: *clientsName}
-	stream, err := server.JoinChat(ctx, &ack)
+func (n *node) joinAuction(ctx context.Context, server proto.AuctionClient) {
+	ack := proto.Message{Sender: n.nodeID}
+	stream, err := server.JoinAuction(ctx, &ack)
 	if err != nil {
 		log.Fatalf("client.JoinChat(ctx, &channel) throws: %v", err)
 	}
-	fmt.Printf("Joined server: %v \n", *clientsName)
-	sendMessage(ctx, server, "join")
+	fmt.Printf("Joined auction: %v \n", n.nodeID)
 	waitc := make(chan struct{})
-
 	go func() {
 		for {
 			in, err := stream.Recv()
@@ -135,11 +144,6 @@ func joinChat(ctx context.Context, server proto.ChittyChatClient) {
 			if err != nil {
 				log.Fatalf("Failed to receive message from channel joining. \nErr: %v", err)
 			}
-			if in.Lamport > LamportClock {
-				LamportClock = in.Lamport
-			}
-			LamportClock++
-			fmt.Printf("Lamport: %v, Message from %v: %v \n", LamportClock, in.Sender, in.Message)
 			fmt.Println("--------------------")
 		}
 	}()
@@ -147,26 +151,17 @@ func joinChat(ctx context.Context, server proto.ChittyChatClient) {
 	<-waitc
 }
 
-func sendMessage(ctx context.Context, server proto.ChittyChatClient, message string) {
-	stream, err := server.SendMessage(ctx)
+func (n *node) bid(bid int32) {
+	for _, element := range n.nodeSlice {
+		go n.sendBid(element, bid)
+	}
+}
+
+func (n *node) sendBid(connection nodeConnection, bid int32) {
+	msg, err := connection.node.Bid(context.Background(), bid)
 	if err != nil {
 		log.Printf("Cannot send message: error: %v", err)
 	}
-	LamportClock++
-	msg := proto.Message{
-		Message: message,
-		Sender:  *clientsName,
-		Lamport: LamportClock,
-	}
-	stream.Send(&msg)
-
-	ack, err := stream.CloseAndRecv()
-	fmt.Printf("Message status: %v \n", ack.Status)
-}
-
-// Function which returns a true boolean if the connection to the server is ready, and false if it's not.
-func conReady(s gRPC.ChittyChatClient) bool {
-	return ServerConn.GetState().String() == "READY"
 }
 
 // sets the logger to use a log.txt file instead of the console

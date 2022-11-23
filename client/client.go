@@ -5,14 +5,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/DarkLordOfDeadstiny/DSYS-gRPC-template/proto"
 	gRPC "github.com/DarkLordOfDeadstiny/DSYS-gRPC-template/proto"
 
 	"google.golang.org/grpc"
@@ -20,16 +19,11 @@ import (
 )
 
 type node struct {
-	listenPort string
-	nodeID     int32
-	//channels        map[string]chan gRPC.Reply
-	lamport         int32
-	nodeSlice       []nodeConnection
-	mutex           sync.Mutex
-	state           string
-	requests        []string
-	lamportRequest  int32
-	repliesReceived chan int
+	nodeID    int32
+	lamport   int32
+	nodeSlice []nodeConnection
+	mutex     sync.Mutex
+	channels  []chan gRPC.Acknowledgement
 }
 type nodeConnection struct {
 	node     gRPC.AuctionClient
@@ -38,7 +32,8 @@ type nodeConnection struct {
 
 // Same principle as in client. Flags allows for user specific arguments/values
 var nodeName = flag.Int("name", 0, "Senders name")
-var port = flag.String("port", "5400", "Listen port")
+
+//var port = flag.String("port", "5400", "Listen port")
 
 func main() {
 	//parse flag/arguments
@@ -53,11 +48,10 @@ func main() {
 	fmt.Println("--- join Server ---")
 
 	node := node{
-		listenPort:      *port,
-		nodeID:          int32(*nodeName),
-		nodeSlice:       make([]nodeConnection, 0),
-		lamport:         1,
-		repliesReceived: make(chan int),
+		nodeID:    int32(*nodeName),
+		nodeSlice: make([]nodeConnection, 0),
+		lamport:   1,
+		channels:  make([]chan gRPC.Acknowledgement, 0),
 	}
 	go node.parseInput()
 	for {
@@ -91,7 +85,10 @@ func (n *node) ConnectToNode(port string) {
 		node:     gRPC.NewAuctionClient(conn),
 		nodeConn: conn,
 	}
+	newChannel := make(chan gRPC.Acknowledgement)
+
 	n.nodeSlice = append(n.nodeSlice, nodeConnection)
+	n.channels = append(n.channels, newChannel)
 	log.Println("the connection is: ", conn.GetState().String())
 }
 
@@ -117,50 +114,141 @@ func (n *node) parseInput() {
 			}
 			n.ConnectToNode(portString)
 		} else if strings.Contains(input, "bid") {
-
+			bidString := input[4:]
+			bidInt, err := strconv.Atoi(bidString)
+			if err != nil {
+				fmt.Println("Input a number dipshit")
+			} else {
+				n.bid(int32(bidInt))
+			}
 		} else if strings.Contains(input, "result") {
-
+			n.result()
 		}
 		continue
 	}
 }
 
-func (n *node) joinAuction(ctx context.Context, server proto.AuctionClient) {
-	ack := proto.Message{Sender: n.nodeID}
-	stream, err := server.JoinAuction(ctx, &ack)
-	if err != nil {
-		log.Fatalf("client.JoinChat(ctx, &channel) throws: %v", err)
-	}
-	fmt.Printf("Joined auction: %v \n", n.nodeID)
-	waitc := make(chan struct{})
-	go func() {
-		for {
-			in, err := stream.Recv()
-			if err == io.EOF {
-				fmt.Println("not working")
-				close(waitc)
-				return
-			}
-			if err != nil {
-				log.Fatalf("Failed to receive message from channel joining. \nErr: %v", err)
-			}
-			fmt.Println("--------------------")
-		}
-	}()
-
-	<-waitc
-}
-
 func (n *node) bid(bid int32) {
-	for _, element := range n.nodeSlice {
-		go n.sendBid(element, bid)
+	result := ""
+	//channels := make([]chan gRPC.Acknowledgement, len(n.nodeSlice))
+	amount := &gRPC.Amount{
+		Lamport: n.lamport,
+		Amount:  bid,
+		NodeID:  n.nodeID,
 	}
+	for i, conn := range n.nodeSlice {
+		//channels = append(channels, channel)
+		go func(index int, connection nodeConnection) {
+			fmt.Println("sending bid to index " + strconv.Itoa(index))
+			msg, err := connection.node.Bid(context.Background(), amount)
+			fmt.Println("bid returned by server")
+			if err != nil {
+				log.Printf("A server has timed out")
+				errorAck := &gRPC.Acknowledgement{
+					Status: "ERROR",
+				}
+				n.channels[index] <- *errorAck
+			} else {
+				fmt.Println("Trying to insert message into channel")
+
+				n.channels[index] <- *msg
+				fmt.Println("Putting message into channel")
+			}
+		}(i, conn)
+	}
+	currentHighestBid := 0
+	for _, channel := range n.channels {
+		response := <-channel
+		fmt.Println("Checking repsponse")
+		fmt.Println(response.Status)
+		if response.Status == "FINISHED" {
+			result = "Auction is finished"
+			n.finished(response.HighestBid, response.NodeID)
+			break
+		}
+		if response.Status == "EXCEPTION" {
+			if currentHighestBid < int(response.HighestBid) {
+				currentHighestBid = int(response.HighestBid)
+				result = "Bid " + strconv.Itoa(int(bid)) + " not accepted, the highest bid is currently " + strconv.Itoa(currentHighestBid)
+			}
+		}
+		if response.Status == "SUCCESS" {
+			if result == "" {
+				result = "Bid " + strconv.Itoa(int(bid)) + " is accepted, and is currently the highest bid"
+			}
+		}
+
+	}
+	log.Println(result)
 }
 
-func (n *node) sendBid(connection nodeConnection, bid int32) {
-	msg, err := connection.node.Bid(context.Background(), bid)
-	if err != nil {
-		log.Printf("Cannot send message: error: %v", err)
+func (n *node) result() {
+	result := ""
+	status := ""
+	request := &gRPC.Request{
+		Lamport: n.lamport,
+	}
+	for i, conn := range n.nodeSlice {
+		go func(index int, connection nodeConnection) {
+			msg, err := connection.node.Result(context.Background(), request)
+			if err != nil {
+				log.Printf("A server has timed out")
+				errorAck := &gRPC.Acknowledgement{
+					Status: "ERROR",
+				}
+				n.channels[index] <- *errorAck
+			} else {
+				n.channels[index] <- *msg
+			}
+		}(i, conn)
+	}
+	currentHighestBid := 0
+	winningBidder := 0
+	for _, channel := range n.channels {
+		response := <-channel
+		if response.Status == "FINISHED" {
+			status = "FINISHED"
+			if currentHighestBid < int(response.HighestBid) {
+				currentHighestBid = int(response.HighestBid)
+				winningBidder = int(response.NodeID)
+				result = "Auction is finished, highest bid was " + strconv.Itoa(int(currentHighestBid)) + " by " + strconv.Itoa(int(winningBidder))
+			}
+		}
+		if response.Status == "ONGOING" {
+			if status != "FINISHED" {
+				if currentHighestBid < int(response.HighestBid) {
+					currentHighestBid = int(response.HighestBid)
+					winningBidder = int(response.NodeID)
+					result = "Current highest bid is " + strconv.Itoa(int(currentHighestBid)) + " by client" + strconv.Itoa(int(winningBidder))
+				}
+			}
+		}
+	}
+	log.Printf(result)
+}
+
+func (n *node) finished(highestBid int32, nodeID int32) {
+	finish := &gRPC.Finish{
+		Lamport:    n.lamport,
+		NodeID:     nodeID,
+		HighestBid: highestBid,
+	}
+	for index, connection := range n.nodeSlice {
+		go func() {
+			msg, err := connection.node.Finished(context.Background(), finish)
+			if err != nil {
+				log.Printf("%s has timed out", connection.node)
+				errorAck := &gRPC.Acknowledgement{
+					Status: "ERROR",
+				}
+				n.channels[index] <- *errorAck
+			} else {
+				n.channels[index] <- *msg
+			}
+		}()
+		for _, channel := range n.channels {
+			<-channel
+		}
 	}
 }
 

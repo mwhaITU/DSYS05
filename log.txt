@@ -1,0 +1,83 @@
+-- Client 1 --
+mcandersyo@Anderss-MacBook-Pro client % go run client.go -name 1
+--- CLIENT APP ---
+--- join Server ---
+--------------------
+-> connect 5400
+2022/11/28 22:46:05 client 1: Attempts to dial on port 5400
+2022/11/28 22:46:05 the connection is:  READY
+-> connect 5401
+2022/11/28 22:46:08 client 1: Attempts to dial on port 5401
+2022/11/28 22:46:08 the connection is:  READY
+-> bid 10
+2022/11/28 22:46:21 Bid 10 is accepted, and is currently the highest bid
+-> result 
+2022/11/28 22:46:30 Current highest bid is 20 by client2
+-> bid 30
+2022/11/28 22:46:32 Bid 30 is accepted, and is currently the highest bid
+-> bid 60
+2022/11/28 22:46:44 A server has timed out
+2022/11/28 22:46:44 Bid 60 is accepted, and is currently the highest bid
+-> result
+2022/11/28 22:47:38 A server has timed out
+2022/11/28 22:47:38 Auction is finished, highest bid was 60 by 1
+
+--Client 2--
+mcandersyo@Anderss-MacBook-Pro client % go run client.go -name 2
+--- CLIENT APP ---
+--- join Server ---
+--------------------
+-> connect 5400
+2022/11/28 22:46:12 client 2: Attempts to dial on port 5400
+2022/11/28 22:46:12 the connection is:  READY
+-> connect 5401
+2022/11/28 22:46:15 client 2: Attempts to dial on port 5401
+2022/11/28 22:46:15 the connection is:  READY
+-> result
+2022/11/28 22:46:24 Current highest bid is 10 by client1
+-> bid 20
+2022/11/28 22:46:26 Bid 20 is accepted, and is currently the highest bid
+-> bid 25
+2022/11/28 22:46:35 Bid 25 not accepted, the highest bid is currently 30
+-> bid 50
+2022/11/28 22:46:40 A server has timed out
+2022/11/28 22:46:40 Bid 50 is accepted, and is currently the highest bid
+-> result
+2022/11/28 22:46:52 A server has timed out
+2022/11/28 22:46:52 Auction is finished, highest bid was 60 by 1
+
+--Server 1---
+mcandersyo@Anderss-MacBook-Pro server % go run server.go -port 5400
+Server is starting...
+2022/11/28 22:45:30 Server default: Attempts to create listener on port 5400
+2022/11/28 22:45:30 Server default: Listening on port 5400
+Auction is waiting to start
+2022/11/28 22:46:21 Received bid amount: 10 
+amount was higher than highest bid
+2022/11/28 22:46:21 Auction started
+2022/11/28 22:46:26 Received bid amount: 20 
+amount was higher than highest bid
+2022/11/28 22:46:32 Received bid amount: 30 
+amount was higher than highest bid
+2022/11/28 22:46:35 Received bid amount: 25 
+^Csignal: interrupt
+
+--Server 2--
+mcandersyo@Anderss-MacBook-Pro server % go run server.go -port 5401
+Server is starting...
+2022/11/28 22:45:37 Server default: Attempts to create listener on port 5401
+2022/11/28 22:45:37 Server default: Listening on port 5401
+Auction is waiting to start
+2022/11/28 22:46:21 Received bid amount: 10 
+amount was higher than highest bid
+2022/11/28 22:46:21 Auction started
+2022/11/28 22:46:26 Received bid amount: 20 
+amount was higher than highest bid
+2022/11/28 22:46:32 Received bid amount: 30 
+amount was higher than highest bid
+2022/11/28 22:46:35 Received bid amount: 25 
+2022/11/28 22:46:40 Received bid amount: 50 
+amount was higher than highest bid
+2022/11/28 22:46:44 Received bid amount: 60 
+amount was higher than highest bid
+2022/11/28 22:46:51 Auction done

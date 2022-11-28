@@ -102,10 +102,6 @@ func (s *Server) startAuction() {
 func (s *Server) Bid(ctx context.Context, amount *gRPC.Amount) (*gRPC.Acknowledgement, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if s.highestBid == 0 {
-
-	}
-
 	if amount.Lamport > s.lamportClock {
 		s.lamportClock = amount.Lamport
 	}
@@ -128,6 +124,9 @@ func (s *Server) Result(ctx context.Context, request *gRPC.Request) (*gRPC.Ackno
 		s.lamportClock = request.Lamport
 	}
 	s.lamportClock++
+	if s.highestBid <= 0 {
+		return &gRPC.Acknowledgement{Lamport: s.lamportClock, Status: "NOT STARTED"}, nil
+	}
 	if s.finished {
 		return &gRPC.Acknowledgement{HighestBid: s.highestBid, Lamport: s.lamportClock, NodeID: s.winningBidder, Status: "FINISHED"}, nil
 	}

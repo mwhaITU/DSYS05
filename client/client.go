@@ -1,5 +1,8 @@
 package main
 
+//remove the go routine entirely
+//make sure that you cannot bid while another bid-request is being processed.
+
 import (
 	"bufio"
 	"context"
@@ -23,7 +26,6 @@ type node struct {
 	lamport   int32
 	nodeSlice []nodeConnection
 	mutex     sync.Mutex
-	channels  []chan gRPC.Acknowledgement
 }
 type nodeConnection struct {
 	node     gRPC.AuctionClient
@@ -51,7 +53,6 @@ func main() {
 		nodeID:    int32(*nodeName),
 		nodeSlice: make([]nodeConnection, 0),
 		lamport:   1,
-		channels:  make([]chan gRPC.Acknowledgement, 0),
 	}
 	go node.parseInput()
 	for {
@@ -85,10 +86,8 @@ func (n *node) ConnectToNode(port string) {
 		node:     gRPC.NewAuctionClient(conn),
 		nodeConn: conn,
 	}
-	newChannel := make(chan gRPC.Acknowledgement)
 
 	n.nodeSlice = append(n.nodeSlice, nodeConnection)
-	n.channels = append(n.channels, newChannel)
 	log.Println("the connection is: ", conn.GetState().String())
 }
 
@@ -130,37 +129,23 @@ func (n *node) parseInput() {
 
 func (n *node) bid(bid int32) {
 	result := ""
+	status := ""
+	currentHighestBid := 0
 	//channels := make([]chan gRPC.Acknowledgement, len(n.nodeSlice))
 	amount := &gRPC.Amount{
 		Lamport: n.lamport,
 		Amount:  bid,
 		NodeID:  n.nodeID,
 	}
-	for i, conn := range n.nodeSlice {
+	for _, connection := range n.nodeSlice {
 		//channels = append(channels, channel)
-		go func(index int, connection nodeConnection) {
-			fmt.Println("sending bid to index " + strconv.Itoa(index))
-			msg, err := connection.node.Bid(context.Background(), amount)
-			fmt.Println("bid returned by server")
-			if err != nil {
-				log.Printf("A server has timed out")
-				errorAck := &gRPC.Acknowledgement{
-					Status: "ERROR",
-				}
-				n.channels[index] <- *errorAck
-			} else {
-				fmt.Println("Trying to insert message into channel")
-
-				n.channels[index] <- *msg
-				fmt.Println("Putting message into channel")
+		response, err := connection.node.Bid(context.Background(), amount)
+		if err != nil {
+			log.Printf("A server has timed out")
+			response = &gRPC.Acknowledgement{
+				Status: "ERROR",
 			}
-		}(i, conn)
-	}
-	currentHighestBid := 0
-	for _, channel := range n.channels {
-		response := <-channel
-		fmt.Println("Checking repsponse")
-		fmt.Println(response.Status)
+		}
 		if response.Status == "FINISHED" {
 			result = "Auction is finished"
 			n.finished(response.HighestBid, response.NodeID)
@@ -173,11 +158,13 @@ func (n *node) bid(bid int32) {
 			}
 		}
 		if response.Status == "SUCCESS" {
-			if result == "" {
-				result = "Bid " + strconv.Itoa(int(bid)) + " is accepted, and is currently the highest bid"
+			if status != "FINISHED" || status != "EXCEPTION" {
+				if currentHighestBid < int(response.HighestBid) {
+					currentHighestBid = int(response.HighestBid)
+					result = "Bid " + strconv.Itoa(int(bid)) + " is accepted, and is currently the highest bid"
+				}
 			}
 		}
-
 	}
 	log.Println(result)
 }
@@ -185,27 +172,19 @@ func (n *node) bid(bid int32) {
 func (n *node) result() {
 	result := ""
 	status := ""
+	currentHighestBid := 0
+	winningBidder := 0
 	request := &gRPC.Request{
 		Lamport: n.lamport,
 	}
-	for i, conn := range n.nodeSlice {
-		go func(index int, connection nodeConnection) {
-			msg, err := connection.node.Result(context.Background(), request)
-			if err != nil {
-				log.Printf("A server has timed out")
-				errorAck := &gRPC.Acknowledgement{
-					Status: "ERROR",
-				}
-				n.channels[index] <- *errorAck
-			} else {
-				n.channels[index] <- *msg
+	for _, connection := range n.nodeSlice {
+		response, err := connection.node.Result(context.Background(), request)
+		if err != nil {
+			log.Printf("A server has timed out")
+			response = &gRPC.Acknowledgement{
+				Status: "ERROR",
 			}
-		}(i, conn)
-	}
-	currentHighestBid := 0
-	winningBidder := 0
-	for _, channel := range n.channels {
-		response := <-channel
+		}
 		if response.Status == "FINISHED" {
 			status = "FINISHED"
 			if currentHighestBid < int(response.HighestBid) {
@@ -213,6 +192,9 @@ func (n *node) result() {
 				winningBidder = int(response.NodeID)
 				result = "Auction is finished, highest bid was " + strconv.Itoa(int(currentHighestBid)) + " by " + strconv.Itoa(int(winningBidder))
 			}
+		}
+		if response.Status == "NOT STARTED" && (status != "FINISHED" || status != "ONGOING") {
+			result = "The auction hasn't started."
 		}
 		if response.Status == "ONGOING" {
 			if status != "FINISHED" {
@@ -233,22 +215,8 @@ func (n *node) finished(highestBid int32, nodeID int32) {
 		NodeID:     nodeID,
 		HighestBid: highestBid,
 	}
-	for index, connection := range n.nodeSlice {
-		go func() {
-			msg, err := connection.node.Finished(context.Background(), finish)
-			if err != nil {
-				log.Printf("%s has timed out", connection.node)
-				errorAck := &gRPC.Acknowledgement{
-					Status: "ERROR",
-				}
-				n.channels[index] <- *errorAck
-			} else {
-				n.channels[index] <- *msg
-			}
-		}()
-		for _, channel := range n.channels {
-			<-channel
-		}
+	for _, connection := range n.nodeSlice {
+		connection.node.Finished(context.Background(), finish)
 	}
 }
 

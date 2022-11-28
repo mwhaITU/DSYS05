@@ -75,7 +75,6 @@ func launchServer() {
 	gRPC.RegisterAuctionServer(grpcServer, server) //Registers the server to the gRPC server
 
 	log.Printf("Server %s: Listening on port %s\n", *serverName, *port)
-	fmt.Println("End of method was reached")
 	go server.startAuction()
 	if err := grpcServer.Serve(list); err != nil {
 		log.Fatalf("failed to serve %v", err)
@@ -90,12 +89,12 @@ func (s *Server) startAuction() {
 	s.finished = false
 	for {
 		if s.highestBid > 0 {
-			fmt.Println("Auction started")
+			log.Println("Auction started")
 			break
 		}
 	}
 	time.Sleep(30 * time.Second)
-	fmt.Println("Auction done")
+	log.Println("Auction done")
 	s.finished = true
 }
 

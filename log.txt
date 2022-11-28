@@ -1,5 +1,5 @@
 -- Client 1 --
-mcandersyo@Anderss-MacBook-Pro client % go run client.go -name 1
+client % go run client.go -name 1
 --- CLIENT APP ---
 --- join Server ---
 --------------------
@@ -23,7 +23,7 @@ mcandersyo@Anderss-MacBook-Pro client % go run client.go -name 1
 2022/11/28 22:47:38 Auction is finished, highest bid was 60 by 1
 
 --Client 2--
-mcandersyo@Anderss-MacBook-Pro client % go run client.go -name 2
+client % go run client.go -name 2
 --- CLIENT APP ---
 --- join Server ---
 --------------------
@@ -47,7 +47,7 @@ mcandersyo@Anderss-MacBook-Pro client % go run client.go -name 2
 2022/11/28 22:46:52 Auction is finished, highest bid was 60 by 1
 
 --Server 1---
-mcandersyo@Anderss-MacBook-Pro server % go run server.go -port 5400
+server % go run server.go -port 5400
 Server is starting...
 2022/11/28 22:45:30 Server default: Attempts to create listener on port 5400
 2022/11/28 22:45:30 Server default: Listening on port 5400
@@ -63,7 +63,7 @@ amount was higher than highest bid
 ^Csignal: interrupt
 
 --Server 2--
-mcandersyo@Anderss-MacBook-Pro server % go run server.go -port 5401
+server % go run server.go -port 5401
 Server is starting...
 2022/11/28 22:45:37 Server default: Attempts to create listener on port 5401
 2022/11/28 22:45:37 Server default: Listening on port 5401
